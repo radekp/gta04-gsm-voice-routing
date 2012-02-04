@@ -321,6 +321,15 @@ void log_with_timestamp(const char *msg)
     fprintf(logfile, "%d %d: %s\n", tp.tv_sec, tp.tv_nsec, msg);
 }
 
+void show_progress()
+{
+    static int counter = 0;
+    char ch = "|\\-/"[(counter++) % 4];
+    fputc(ch, logfile);
+    fputc('\b', logfile);
+    fflush(logfile);
+}
+
 int main()
 {
     int rc;
@@ -412,7 +421,9 @@ int main()
             continue;
         }
 
-        if(!started) {
+        if (started) {
+            show_progress();
+        } else {
             fprintf(logfile, "voice routing started\n");
             started = 1;
         }
