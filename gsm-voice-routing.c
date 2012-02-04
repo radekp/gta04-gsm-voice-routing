@@ -80,6 +80,8 @@ period - this is our latency.
 #define ERR_WRITE -19
 #define ERR_SHORT_WRITE -20
 
+FILE *logfile;
+
 struct route_stream
 {
     const char *id;             // in: one of r0, r1, p0, p1
@@ -101,12 +103,12 @@ struct route_stream
    return_code */
 int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
 {
-    fprintf(stderr, "%s (%s): ", s->id, s->pcm_name);
-    fprintf(stderr, msg);
+    fprintf(logfile, "%s (%s): ", s->id, s->pcm_name);
+    fprintf(logfile, msg);
     if (snd_err < 0) {
-        fprintf(stderr, ": ", snd_strerror(snd_err));
+        fprintf(logfile, ": ", snd_strerror(snd_err));
     }
-    fprintf(stderr, "\n");
+    fprintf(logfile, "\n");
     return return_code;
 }
 
@@ -231,7 +233,7 @@ int open_route_stream(struct route_stream *s)
     }
 
     /* Uncomment to dump hw setup */
-    /* snd_output_stdio_attach(&log, stderr, 0);
+    /* snd_output_stdio_attach(&log, logfile, 0);
        snd_pcm_dump(s->handle, log);
        snd_output_close(log); */
 
@@ -261,7 +263,7 @@ void open_route_stream_repeated(struct route_stream *s)
             return;
         }
         close_route_stream(s);
-        fprintf(stderr, "retrying in 100 ms\n");
+        fprintf(logfile, "retrying in 100 ms\n");
         usleep(1000 * 100);
     }
 }
@@ -316,13 +318,26 @@ void log_with_timestamp(const char *msg)
 {
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
-    fprintf(stderr, "%d %d: %s\n", tp.tv_sec, tp.tv_nsec, msg);
+    fprintf(logfile, "%d %d: %s\n", tp.tv_sec, tp.tv_nsec, msg);
 }
 
 int main()
 {
     int rc;
     int started = 0;
+    char *logfilename;
+
+    logfile = stderr;
+    logfilename = getenv("GSM_VOICE_ROUTING_LOGFILE");
+    if (logfilename) {
+        FILE *f = fopen(logfilename, "w");
+        if (f) {
+            logfile = f;
+        } else {
+            fprintf(stderr, "failed to open logfile %s\n", logfilename);
+        }
+    }
+    fprintf(logfile, "gsm-voice-routing started\n");
 
     struct route_stream p0 = {
         .id = "p0",
@@ -380,22 +395,23 @@ int main()
 
     /* Route sound */
     for (;;) {
-        
+
         /* Recording  - first from internal card (so that we always clean the
            recording buffer), then UMTS, which can fail */
         if (route_stream_read(&r0)) {
             continue;
         }
-        
+
         rc = route_stream_read(&r1);
         if (rc == ERR_READ && started) {
-            fprintf(stderr, "read error after some succesful routing (hangup)\n");
+            fprintf(logfile,
+                    "read error after some succesful routing (hangup)\n");
             return 0;
         }
         if (rc != 0) {
             continue;
         }
-        
+
         started = 1;
 
         memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
@@ -409,6 +425,8 @@ int main()
     close_route_stream(&p1);
     close_route_stream(&r0);
     close_route_stream(&r1);
+
+    fclose(logfile);
 
     return 0;
 }
