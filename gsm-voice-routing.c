@@ -412,7 +412,10 @@ int main()
             continue;
         }
 
-        started = 1;
+        if(!started) {
+            fprintf(logfile, "voice routing started\n");
+            started = 1;
+        }
 
         memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
         route_stream_write(&p0);
