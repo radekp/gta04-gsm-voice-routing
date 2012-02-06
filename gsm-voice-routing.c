@@ -103,10 +103,9 @@ struct route_stream
    return_code */
 int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
 {
-    fprintf(logfile, "%s (%s): ", s->id, s->pcm_name);
-    fprintf(logfile, msg);
+    fprintf(logfile, "%s (%s): %s", s->id, s->pcm_name, msg);
     if (snd_err < 0) {
-        fprintf(logfile, ": ", snd_strerror(snd_err));
+        fprintf(logfile, ": %s", snd_strerror(snd_err));
     }
     fprintf(logfile, "\n");
     return return_code;
@@ -318,7 +317,7 @@ void log_with_timestamp(const char *msg)
 {
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
-    fprintf(logfile, "%d %d: %s\n", tp.tv_sec, tp.tv_nsec, msg);
+    fprintf(logfile, "%ld %ld: %s\n", tp.tv_sec, tp.tv_nsec, msg);
 }
 
 void show_progress()
