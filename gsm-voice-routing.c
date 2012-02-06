@@ -113,10 +113,7 @@ int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
 
 int open_route_stream(struct route_stream *s)
 {
-    unsigned int val;
-    int dir;
     int rc;
-    static snd_output_t *log;
 
     /* Open PCM device for playback. */
     rc = snd_pcm_open(&(s->handle), s->pcm_name, s->stream, 0);
@@ -232,7 +229,8 @@ int open_route_stream(struct route_stream *s)
     }
 
     /* Uncomment to dump hw setup */
-    /* snd_output_stdio_attach(&log, logfile, 0);
+    /* static snd_output_t *log;
+       snd_output_stdio_attach(&log, logfile, 0);
        snd_pcm_dump(s->handle, log);
        snd_output_close(log); */
 
