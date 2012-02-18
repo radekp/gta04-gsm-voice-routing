@@ -345,6 +345,12 @@ int main()
     }
     fprintf(logfile, "gsm-voice-routing started\n");
 
+    /* We want realtime process priority */
+    rc = nice(-20);
+    if (rc != -20) {
+        fprintf(logfile, "nice() failed\n");
+    }
+    
     struct route_stream p0 = {
         .id = "p0",
         .pcm_name = "default",
