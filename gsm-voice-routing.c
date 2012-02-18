@@ -320,11 +320,11 @@ void log_with_timestamp(const char *msg)
 
 void show_progress()
 {
-    static int counter = 0;
+/*   static int counter = 0;
     char ch = "|\\-/"[(counter++) % 4];
     fputc(ch, logfile);
     fputc('\b', logfile);
-    fflush(logfile);
+    fflush(logfile);*/
 }
 
 int main()
