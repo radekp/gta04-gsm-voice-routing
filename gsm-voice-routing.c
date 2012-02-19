@@ -80,6 +80,9 @@ period - this is our latency.
 #define ERR_WRITE -19
 #define ERR_SHORT_WRITE -20
 
+#define s16 short
+#define u16 unsigned short
+
 FILE *logfile;
 
 struct route_stream
@@ -327,6 +330,71 @@ void show_progress()
     fflush(logfile);*/
 }
 
+static void vol_up(char *buf, int buf_size)
+{
+    int i;
+    s16 *val = (short *)(buf);
+    for(i = 0; i < buf_size; i += 2)
+    {
+        *val = *val * 2;
+    }
+}
+
+static void vol_down(char *buf, int buf_size)
+{
+    int i;
+    s16 *val = (short *)(buf);
+    for(i = 0; i < buf_size; i += 2)
+    {
+        *val = *val / 2;
+    }
+}
+
+/* Reduce echo by adjusting volumes in record and playback buffer with simple
+   walkie-talkie like algorithm.
+
+   First we decide which buffer has higher volume (i.e. if you are speaking or
+   listening). This buffer is kept as is and we made the other buffer silent or
+   very low volume.
+   
+   We use integer for computing volumes, this should be fine if the buffer size
+   is not too big (65535 is max).
+*/
+//int row = 0;
+void reduce_echo(char *buf_a, char *buf_b, int buf_size)
+{
+    int i;
+    unsigned int sum_a = 0;
+    unsigned int sum_b = 0;
+
+    s16 *a;
+    s16 *b;
+
+    a = (short *)(buf_a);
+    b = (short *)(buf_b);
+    for(i = 0; i < buf_size; i+=2)
+    {
+        sum_a += abs(*a);
+        sum_b += abs(*b);
+        a++;
+        b++;
+    }
+    if(sum_a > 10000) {
+        //fprintf(stderr, "listening %d ", sum_a);
+        
+        vol_up(buf_a, buf_size);
+        vol_down(buf_b, buf_size);
+
+    } else {
+        //fprintf(stderr, "talking %d ", sum_a);
+        
+        vol_up(buf_b, buf_size);
+        vol_down(buf_a, buf_size);
+
+    }
+    //printf("%d, %d, %d\n", row++, sum_a, sum_b);
+}
+
 int main()
 {
     int rc;
@@ -431,10 +499,13 @@ int main()
             started = 1;
         }
 
-        memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
-        route_stream_write(&p0);
 
+        memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
         memmove(p1.period_buffer, r0.period_buffer, r0.period_buffer_size);
+
+        // reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size * 2);
+        
+        route_stream_write(&p0);
         route_stream_write(&p1);
     }
 
