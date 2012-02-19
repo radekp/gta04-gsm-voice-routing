@@ -40,13 +40,13 @@ p1 - play on hw:1,0 umts sound card
 All streams have rate 8000 (rate of umts sound card), 1 channel and 16bit per
 sample (SND_PCM_FORMAT_S16_LE).
 
-We set buffer_size of sound card to 1000.
+We set buffer_size of sound card to 1024.
 The sound card buffer consists of 4 periods.
-Period has 250 frames
+Period has 256 frames
 Frame has just one sample (one channel) and both sample and frame are 2 bytes
 
-We always play/record one period (250 samples, 500 bytes). At rate 8000Hz if
-we had 8000 samples it would be 1s, with 250 samples it makes 31.25ms long
+We always play/record one period (256 samples, 512 bytes). At rate 8000Hz if
+we had 8000 samples it would be 1s, with 256 samples it makes 31.25ms long
 period - this is our latency.
 
 */
@@ -54,10 +54,20 @@ period - this is our latency.
 /* Use the newer ALSA API */
 #define ALSA_PCM_NEW_HW_PARAMS_API
 
+/* Define this to enable speex acoustic echo cancellation */
+// #define USE_SPEEX_AEC
+
+/* Define this to use walkie talkie echo reduction */
+// #define USE_WALKIE_TALKIE_AEC
+
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
 #include <alsa/asoundlib.h>
+
+#ifdef USE_SPEEX_AEC
+#include <speex/speex_echo.h>
+#endif
 
 #define ERR_PCM_OPEN_FAILED -1
 #define ERR_HW_PARAMS_ANY -2
@@ -92,13 +102,13 @@ struct route_stream
     snd_pcm_stream_t stream;    // in: SND_PCM_STREAM_PLAYBACK / SND_PCM_STREAM_CAPTURE
     snd_pcm_uframes_t start_threshold;  // in: start treshold or 0 to keep default
     snd_pcm_uframes_t stop_threshold;   // in: stop treshold or 0 to keep default
-    snd_pcm_uframes_t buffer_size;  // in/out: hw buffer size, e.g. 1000 frames
-    snd_pcm_uframes_t period_size;  // in/out: period size, e.g. 250 frames
+    snd_pcm_uframes_t buffer_size;  // in/out: hw buffer size, e.g. 1024 frames
+    snd_pcm_uframes_t period_size;  // in/out: period size, e.g. 256 frames
 
     snd_pcm_t *handle;          // out: pcm handle
     snd_pcm_hw_params_t *hwparams;  // out:
     snd_pcm_sw_params_t *swparams;  // out:
-    int period_buffer_size;     // out: size 2000 (250 frames=250 samples, one sample=2bytes)
+    int period_buffer_size;     // out: size 2000 (256 frames=256 samples, one sample=2bytes)
     char *period_buffer;        // out: allocated buffer for playing/recording
 };
 
@@ -163,7 +173,7 @@ int open_route_stream(struct route_stream *s)
                    ERR_HW_PARAMS_SET_RATE);
     }
 
-    /* Period size in frames (e.g. 250) */
+    /* Period size in frames (e.g. 256) */
     rc = snd_pcm_hw_params_set_period_size(s->handle, s->hwparams,
                                            s->period_size, 0);
     if (rc < 0) {
@@ -171,7 +181,7 @@ int open_route_stream(struct route_stream *s)
                    ERR_HW_PARAMS_SET_PERIOD_SIZE);
     }
 
-    /* Buffer size in frames (e.g. 1000) */
+    /* Buffer size in frames (e.g. 1024) */
     rc = snd_pcm_hw_params_set_buffer_size(s->handle, s->hwparams,
                                            s->buffer_size);
     if (rc < 0) {
@@ -330,12 +340,13 @@ void show_progress()
     fflush(logfile);*/
 }
 
+#ifdef USE_WALKIE_TALKIE_AEC
+
 static void vol_up(char *buf, int buf_size)
 {
     int i;
     s16 *val = (short *)(buf);
-    for(i = 0; i < buf_size; i += 2)
-    {
+    for (i = 0; i < buf_size; i += 2) {
         *val = *val * 2;
     }
 }
@@ -344,8 +355,7 @@ static void vol_down(char *buf, int buf_size)
 {
     int i;
     s16 *val = (short *)(buf);
-    for(i = 0; i < buf_size; i += 2)
-    {
+    for (i = 0; i < buf_size; i += 2) {
         *val = *val / 2;
     }
 }
@@ -360,46 +370,49 @@ static void vol_down(char *buf, int buf_size)
    We use integer for computing volumes, this should be fine if the buffer size
    is not too big (65535 is max).
 */
-//int row = 0;
 void reduce_echo(char *buf_a, char *buf_b, int buf_size)
 {
     int i;
     unsigned int sum_a = 0;
     unsigned int sum_b = 0;
+    //static int row = 0;
 
     s16 *a;
     s16 *b;
 
     a = (short *)(buf_a);
     b = (short *)(buf_b);
-    for(i = 0; i < buf_size; i+=2)
-    {
+    for (i = 0; i < buf_size; i += 2) {
         sum_a += abs(*a);
         sum_b += abs(*b);
         a++;
         b++;
     }
-    if(sum_a > 10000) {
+    if (sum_a > 10000) {
         //fprintf(stderr, "listening %d ", sum_a);
-        
+
         vol_up(buf_a, buf_size);
         vol_down(buf_b, buf_size);
 
     } else {
         //fprintf(stderr, "talking %d ", sum_a);
-        
+
         vol_up(buf_b, buf_size);
         vol_down(buf_a, buf_size);
 
     }
     //printf("%d, %d, %d\n", row++, sum_a, sum_b);
 }
+#endif
 
 int main()
 {
     int rc;
     int started = 0;
     char *logfilename;
+#ifdef USE_SPEEX_AEC
+    SpeexEchoState *echo_state;
+#endif
 
     logfile = stderr;
     logfilename = getenv("GSM_VOICE_ROUTING_LOGFILE");
@@ -418,15 +431,20 @@ int main()
     if (rc != -20) {
         fprintf(logfile, "nice() failed\n");
     }
-    
+#ifdef USE_SPEEX_AEC
+    /* 256=frame (period size), 3000 is filter length (recommended is 1/3 of
+       reverbation time - for 1s it's 8000 / 3 */
+    echo_state = speex_echo_state_init(256, 8000);
+#endif
+
     struct route_stream p0 = {
         .id = "p0",
         .pcm_name = "default",
         .stream = SND_PCM_STREAM_PLAYBACK,
-        .start_threshold = 1000,
-        .stop_threshold = 1000,
-        .buffer_size = 1000,
-        .period_size = 250,
+        .start_threshold = 1024,
+        .stop_threshold = 1024,
+        .buffer_size = 1024,
+        .period_size = 256,
         .handle = 0,
         .period_buffer = 0
     };
@@ -437,8 +455,8 @@ int main()
         .stream = SND_PCM_STREAM_CAPTURE,
         .start_threshold = 0,
         .stop_threshold = 0,
-        .buffer_size = 1000,
-        .period_size = 250,
+        .buffer_size = 1024,
+        .period_size = 256,
         .handle = 0,
         .period_buffer = 0
     };
@@ -447,10 +465,10 @@ int main()
         .id = "p1",
         .pcm_name = "hw:1,0",
         .stream = SND_PCM_STREAM_PLAYBACK,
-        .start_threshold = 1000,
-        .stop_threshold = 1000,
-        .buffer_size = 1000,
-        .period_size = 250,
+        .start_threshold = 1024,
+        .stop_threshold = 1024,
+        .buffer_size = 1024,
+        .period_size = 256,
         .handle = 0,
         .period_buffer = 0
     };
@@ -461,8 +479,8 @@ int main()
         .stream = SND_PCM_STREAM_CAPTURE,
         .start_threshold = 0,
         .stop_threshold = 0,
-        .buffer_size = 1000,
-        .period_size = 250,
+        .buffer_size = 1024,
+        .period_size = 256,
         .handle = 0,
         .period_buffer = 0
     };
@@ -499,15 +517,26 @@ int main()
             started = 1;
         }
 
-
         memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
         memmove(p1.period_buffer, r0.period_buffer, r0.period_buffer_size);
 
-        // reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size * 2);
-        
+#ifdef USE_WALKIE_TALKIE_AEC
+        reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size * 2);
+#endif
+
+#ifdef USE_SPEEX_AEC
+        speex_echo_playback(echo_state, (spx_int16_t *) p0.period_buffer);
+        speex_echo_capture(echo_state, (spx_int16_t *) r0.period_buffer,
+                           (spx_int16_t *) p1.period_buffer);
+#endif
+
         route_stream_write(&p0);
         route_stream_write(&p1);
     }
+
+#ifdef USE_SPEEX_AEC
+    speex_echo_state_destroy(echo_state);
+#endif
 
     close_route_stream(&p0);
     close_route_stream(&p1);
