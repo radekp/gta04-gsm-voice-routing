@@ -58,7 +58,7 @@ period - this is our latency.
 // #define USE_SPEEX_AEC
 
 /* Define this to use walkie talkie echo reduction */
-// #define USE_WALKIE_TALKIE_AEC
+#define USE_WALKIE_TALKIE_AEC
 
 #include <unistd.h>
 #include <string.h>
@@ -342,21 +342,23 @@ void show_progress()
 
 #ifdef USE_WALKIE_TALKIE_AEC
 
-static void vol_up(char *buf, int buf_size)
+static void vol_up(char *buf, snd_pcm_uframes_t period_size)
 {
     int i;
-    s16 *val = (short *)(buf);
-    for (i = 0; i < buf_size; i += 2) {
-        *val = *val * 2;
+    s16 *val = (s16 *) (buf);
+    for(i = 0; i < period_size; i++) {
+        *val = *val * 4;
+        val++;
     }
 }
 
-static void vol_down(char *buf, int buf_size)
+static void vol_down(char *buf, snd_pcm_uframes_t period_size)
 {
     int i;
-    s16 *val = (short *)(buf);
-    for (i = 0; i < buf_size; i += 2) {
+    s16 *val = (s16 *) (buf);
+    for(i = 0; i < period_size; i++) {
         *val = *val / 2;
+        val++;
     }
 }
 
@@ -370,38 +372,43 @@ static void vol_down(char *buf, int buf_size)
    We use integer for computing volumes, this should be fine if the buffer size
    is not too big (65535 is max).
 */
-void reduce_echo(char *buf_a, char *buf_b, int buf_size)
+void reduce_echo(char *p0, char *p1, snd_pcm_uframes_t period_size)
 {
     int i;
-    unsigned int sum_a = 0;
-    unsigned int sum_b = 0;
-    //static int row = 0;
+    int sum_p0 = 0;
+    int sum_p1 = 0;
+    s16 *v0;
+    s16 *v1;
 
-    s16 *a;
-    s16 *b;
-
-    a = (short *)(buf_a);
-    b = (short *)(buf_b);
-    for (i = 0; i < buf_size; i += 2) {
-        sum_a += abs(*a);
-        sum_b += abs(*b);
-        a++;
-        b++;
+    v0 = (s16 *)(p0);
+    v1 = (s16 *)(p1);
+    for (i = 0; i < period_size; i++) {
+        sum_p0 += abs(*v0);
+        sum_p1 += abs(*v1);
+        v0++;
+        v1++;
     }
-    if (sum_a > 10000) {
-        //fprintf(stderr, "listening %d ", sum_a);
 
-        vol_up(buf_a, buf_size);
-        vol_down(buf_b, buf_size);
+    int diff = sum_p0 - sum_p1;
 
-    } else {
-        //fprintf(stderr, "talking %d ", sum_a);
-
-        vol_up(buf_b, buf_size);
-        vol_down(buf_a, buf_size);
+    /* 10000 seems to be good limit value. Silence is ~2000 and speech is
+       ~80000. It would be nice to somehow compute this value on the fly, but
+       i have no idea how to do it now */
+    if (diff > 10000) {
+        /* fprintf(stderr, "listening p0=%*d    p1=%*d    diff=%*d\n", -6, sum_p0,
+           -6, sum_p1, -6, diff); */
+        vol_up(p0, period_size);
+        vol_down(p1, period_size);
+        return;
 
     }
-    //printf("%d, %d, %d\n", row++, sum_a, sum_b);
+    if (diff < -10000) {
+        /* fprintf(stderr, "talking   p0=%*d    p1=%*d    diff=%*d\n", -6, sum_p0,
+           -6, sum_p1, -6, diff); */
+        vol_up(p1, period_size);
+        vol_down(p0, period_size);
+    }
+    //printf("%d, %d, %d\n", round++, sum_a, sum_b);
 }
 #endif
 
@@ -432,9 +439,9 @@ int main()
         fprintf(logfile, "nice() failed\n");
     }
 #ifdef USE_SPEEX_AEC
-    /* 256=frame (period size), 3000 is filter length (recommended is 1/3 of
+    /* 256=frame (period size), 4096 is filter length (recommended is 1/3 of
        reverbation time - for 1s it's 8000 / 3 */
-    echo_state = speex_echo_state_init(256, 8000);
+    echo_state = speex_echo_state_init(256, 4096);
 #endif
 
     struct route_stream p0 = {
@@ -521,13 +528,13 @@ int main()
         memmove(p1.period_buffer, r0.period_buffer, r0.period_buffer_size);
 
 #ifdef USE_WALKIE_TALKIE_AEC
-        reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size * 2);
+        reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size);
 #endif
 
 #ifdef USE_SPEEX_AEC
-        speex_echo_playback(echo_state, (spx_int16_t *) p0.period_buffer);
-        speex_echo_capture(echo_state, (spx_int16_t *) r0.period_buffer,
-                           (spx_int16_t *) p1.period_buffer);
+        speex_echo_cancellation(echo_state, (spx_int16_t *) r0.period_buffer,
+                                (spx_int16_t *) p0.period_buffer,
+                                (spx_int16_t *) p1.period_buffer);
 #endif
 
         route_stream_write(&p0);
