@@ -347,7 +347,7 @@ static void vol_up(char *buf, snd_pcm_uframes_t period_size)
     int i;
     s16 *val = (s16 *) (buf);
     for(i = 0; i < period_size; i++) {
-        *val = *val * 4;
+        *val = *val * 2;
         val++;
     }
 }
