@@ -407,7 +407,7 @@ static void vol_down(char *buf, snd_pcm_uframes_t period_size)
     int i;
     s16 *val = (s16 *) (buf);
     for (i = 0; i < period_size; i++) {
-        *val = *val / 2;
+        *val = 0; // *val / 2;
         val++;
     }
 }
