@@ -63,6 +63,8 @@ period - this is our latency.
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <alsa/asoundlib.h>
 
 #ifdef USE_SPEEX_AEC
@@ -331,6 +333,54 @@ void log_with_timestamp(const char *msg)
     fprintf(logfile, "%ld %ld: %s\n", tp.tv_sec, tp.tv_nsec, msg);
 }
 
+// Write string count bytes long to file
+void write_file(const char *path, const char *value, size_t count)
+{
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        return;
+    }
+    write(fd, value, count);
+    close(fd);
+}
+
+int aux_red_state = 0;
+int aux_green_state = 0;
+
+void set_aux_leds(int red, int green)
+{
+    if (aux_red_state == red && aux_green_state == green) {
+        return;
+    }
+    aux_red_state = red;
+    aux_green_state = green;
+
+    if (red) {
+        write_file("/sys/class/leds/gta04:red:aux/brightness", "255", 3);
+    } else {
+        write_file("/sys/class/leds/gta04:red:aux/brightness", "0", 1);
+    }
+    if (green) {
+        write_file("/sys/class/leds/gta04:green:aux/brightness", "255", 3);
+    } else {
+        write_file("/sys/class/leds/gta04:green:aux/brightness", "0", 1);
+    }
+}
+
+void blink_aux()
+{
+    static int last_blink_secs;
+
+    struct timespec tp;
+    clock_gettime(CLOCK_MONOTONIC, &tp);
+
+    if (tp.tv_sec == last_blink_secs) {
+        return;
+    }
+    last_blink_secs = tp.tv_sec;
+    set_aux_leds(!aux_red_state, aux_red_state);
+}
+
 void show_progress()
 {
 /*   static int counter = 0;
@@ -346,7 +396,7 @@ static void vol_up(char *buf, snd_pcm_uframes_t period_size)
 {
     int i;
     s16 *val = (s16 *) (buf);
-    for(i = 0; i < period_size; i++) {
+    for (i = 0; i < period_size; i++) {
         *val = *val * 2;
         val++;
     }
@@ -356,7 +406,7 @@ static void vol_down(char *buf, snd_pcm_uframes_t period_size)
 {
     int i;
     s16 *val = (s16 *) (buf);
-    for(i = 0; i < period_size; i++) {
+    for (i = 0; i < period_size; i++) {
         *val = *val / 2;
         val++;
     }
@@ -380,8 +430,8 @@ void reduce_echo(char *p0, char *p1, snd_pcm_uframes_t period_size)
     s16 *v0;
     s16 *v1;
 
-    v0 = (s16 *)(p0);
-    v1 = (s16 *)(p1);
+    v0 = (s16 *) (p0);
+    v1 = (s16 *) (p1);
     for (i = 0; i < period_size; i++) {
         sum_p0 += abs(*v0);
         sum_p1 += abs(*v1);
@@ -399,14 +449,17 @@ void reduce_echo(char *p0, char *p1, snd_pcm_uframes_t period_size)
            -6, sum_p1, -6, diff); */
         vol_up(p0, period_size);
         vol_down(p1, period_size);
+        set_aux_leds(0, 1);
         return;
 
-    }
-    if (diff < -10000) {
+    } else if (diff < -10000) {
         /* fprintf(stderr, "talking   p0=%*d    p1=%*d    diff=%*d\n", -6, sum_p0,
            -6, sum_p1, -6, diff); */
         vol_up(p1, period_size);
         vol_down(p0, period_size);
+        set_aux_leds(1, 0);
+    } else {
+        set_aux_leds(0, 0);
     }
     //printf("%d, %d, %d\n", round++, sum_a, sum_b);
 }
@@ -420,6 +473,8 @@ int main()
 #ifdef USE_SPEEX_AEC
     SpeexEchoState *echo_state;
 #endif
+
+    blink_aux();                // turn red led on so that we know we started
 
     logfile = stderr;
     logfilename = getenv("GSM_VOICE_ROUTING_LOGFILE");
@@ -504,6 +559,7 @@ int main()
         /* Recording  - first from internal card (so that we always clean the
            recording buffer), then UMTS, which can fail */
         if (route_stream_read(&r0)) {
+            blink_aux();
             continue;
         }
 
@@ -511,6 +567,7 @@ int main()
         if (rc == ERR_READ && started) {
             fprintf(logfile,
                     "read error after some succesful routing (hangup)\n");
+            set_aux_leds(0, 0);
             return 0;
         }
         if (rc != 0) {
