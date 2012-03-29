@@ -55,10 +55,10 @@ period - this is our latency.
 #define ALSA_PCM_NEW_HW_PARAMS_API
 
 /* Define this to enable speex acoustic echo cancellation */
-// #define USE_SPEEX_AEC
+#define USE_SPEEX_AEC
 
 /* Define this to use walkie talkie echo reduction */
-#define USE_WALKIE_TALKIE_AEC
+//#define USE_WALKIE_TALKIE_AEC
 
 #include <unistd.h>
 #include <string.h>
@@ -496,7 +496,7 @@ int main()
 #ifdef USE_SPEEX_AEC
     /* 256=frame (period size), 4096 is filter length (recommended is 1/3 of
        reverbation time - for 1s it's 8000 / 3 */
-    echo_state = speex_echo_state_init(256, 4096);
+    echo_state = speex_echo_state_init(256, 8192);
 #endif
 
     struct route_stream p0 = {
@@ -581,17 +581,18 @@ int main()
             started = 1;
         }
 
-        memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
-        memmove(p1.period_buffer, r0.period_buffer, r0.period_buffer_size);
-
-#ifdef USE_WALKIE_TALKIE_AEC
-        reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size);
-#endif
-
 #ifdef USE_SPEEX_AEC
         speex_echo_cancellation(echo_state, (spx_int16_t *) r0.period_buffer,
                                 (spx_int16_t *) p0.period_buffer,
                                 (spx_int16_t *) p1.period_buffer);
+        
+        memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
+#endif
+
+#ifdef USE_WALKIE_TALKIE_AEC
+        memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
+        memmove(p1.period_buffer, r0.period_buffer, r0.period_buffer_size);
+        reduce_echo(p0.period_buffer, p1.period_buffer, p0.period_size);
 #endif
 
         route_stream_write(&p0);
