@@ -122,6 +122,10 @@ struct route_stream
 static int err(const char *msg, int snd_err, struct route_stream *s,
                int return_code)
 {
+    if(terminating) {
+        return ERR_TERMINATING;
+    }
+    
     fprintf(logfile, "%s (%s): %s", s->id, s->pcm_name, msg);
     if (snd_err < 0) {
         fprintf(logfile, ": %s", snd_strerror(snd_err));
@@ -262,10 +266,12 @@ static int close_route_stream(struct route_stream *s)
         return 0;
     }
     snd_pcm_close(s->handle);
+    s->handle = 0;
     if (s->period_buffer == 0) {
         return 0;
     }
     free(s->period_buffer);
+    s->period_buffer = 0;
     return 0;
 }
 
@@ -296,10 +302,6 @@ static int route_stream_read(struct route_stream *s)
         return 0;
     }
 
-    if (terminating) {
-        return ERR_TERMINATING;
-    }
-
     /* EPIPE means overrun */
     if (rc == -EPIPE) {
         err("overrun occured", rc, s, ERR_READ_OVERRUN);
@@ -325,10 +327,6 @@ static int route_stream_write(struct route_stream *s)
     rc = snd_pcm_writei(s->handle, s->period_buffer, s->period_size);
     if (rc == s->period_size) {
         return 0;
-    }
-
-    if (terminating) {
-        return ERR_TERMINATING;
     }
 
     /* EPIPE means underrun */
