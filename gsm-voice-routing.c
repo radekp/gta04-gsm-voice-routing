@@ -119,7 +119,8 @@ struct route_stream
 
 /* Dump error on stderr with stream and error description, and return given
    return_code */
-static int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
+static int err(const char *msg, int snd_err, struct route_stream *s,
+               int return_code)
 {
     fprintf(logfile, "%s (%s): %s", s->id, s->pcm_name, msg);
     if (snd_err < 0) {
@@ -295,6 +296,10 @@ static int route_stream_read(struct route_stream *s)
         return 0;
     }
 
+    if (terminating) {
+        return ERR_TERMINATING;
+    }
+
     /* EPIPE means overrun */
     if (rc == -EPIPE) {
         err("overrun occured", rc, s, ERR_READ_OVERRUN);
@@ -320,6 +325,10 @@ static int route_stream_write(struct route_stream *s)
     rc = snd_pcm_writei(s->handle, s->period_buffer, s->period_size);
     if (rc == s->period_size) {
         return 0;
+    }
+
+    if (terminating) {
+        return ERR_TERMINATING;
     }
 
     /* EPIPE means underrun */
