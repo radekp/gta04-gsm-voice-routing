@@ -60,11 +60,12 @@ period - this is our latency.
 /* Define this to use walkie talkie echo reduction */
 //#define USE_WALKIE_TALKIE_AEC
 
+#include <time.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #include <string.h>
-#include <time.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <alsa/asoundlib.h>
 
 #ifdef USE_SPEEX_AEC
@@ -91,11 +92,13 @@ period - this is our latency.
 #define ERR_WRITE_UNDERRUN -18
 #define ERR_WRITE -19
 #define ERR_SHORT_WRITE -20
+#define ERR_TERMINATING -21
 
 #define s16 short
 #define u16 unsigned short
 
 FILE *logfile;
+int terminating = 0;
 
 struct route_stream
 {
@@ -116,7 +119,7 @@ struct route_stream
 
 /* Dump error on stderr with stream and error description, and return given
    return_code */
-int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
+static int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
 {
     fprintf(logfile, "%s (%s): %s", s->id, s->pcm_name, msg);
     if (snd_err < 0) {
@@ -126,7 +129,7 @@ int err(const char *msg, int snd_err, struct route_stream *s, int return_code)
     return return_code;
 }
 
-int open_route_stream(struct route_stream *s)
+static int open_route_stream(struct route_stream *s)
 {
     int rc;
 
@@ -252,12 +255,11 @@ int open_route_stream(struct route_stream *s)
     return 0;
 }
 
-int close_route_stream(struct route_stream *s)
+static int close_route_stream(struct route_stream *s)
 {
     if (s->handle == 0) {
         return 0;
     }
-    snd_pcm_drain(s->handle);
     snd_pcm_close(s->handle);
     if (s->period_buffer == 0) {
         return 0;
@@ -266,7 +268,7 @@ int close_route_stream(struct route_stream *s)
     return 0;
 }
 
-void open_route_stream_repeated(struct route_stream *s)
+static void open_route_stream_repeated(struct route_stream *s)
 {
     int rc;
     for (;;) {
@@ -280,9 +282,13 @@ void open_route_stream_repeated(struct route_stream *s)
     }
 }
 
-int route_stream_read(struct route_stream *s)
+static int route_stream_read(struct route_stream *s)
 {
     int rc;
+
+    if (terminating) {
+        return ERR_TERMINATING;
+    }
 
     rc = snd_pcm_readi(s->handle, s->period_buffer, s->period_size);
     if (rc == s->period_size) {
@@ -303,9 +309,13 @@ int route_stream_read(struct route_stream *s)
     return err("short read", rc, s, ERR_SHORT_READ);
 }
 
-int route_stream_write(struct route_stream *s)
+static int route_stream_write(struct route_stream *s)
 {
     int rc;
+
+    if (terminating) {
+        return ERR_TERMINATING;
+    }
 
     rc = snd_pcm_writei(s->handle, s->period_buffer, s->period_size);
     if (rc == s->period_size) {
@@ -326,15 +336,15 @@ int route_stream_write(struct route_stream *s)
     return err("short write", rc, s, ERR_SHORT_WRITE);
 }
 
-void log_with_timestamp(const char *msg)
+/*static void log_with_timestamp(const char *msg)
 {
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
     fprintf(logfile, "%ld %ld: %s\n", tp.tv_sec, tp.tv_nsec, msg);
-}
+}*/
 
 // Write string count bytes long to file
-void write_file(const char *path, const char *value, size_t count)
+static void write_file(const char *path, const char *value, size_t count)
 {
     int fd = open(path, O_WRONLY);
     if (fd < 0) {
@@ -347,7 +357,7 @@ void write_file(const char *path, const char *value, size_t count)
 int aux_red_state = 0;
 int aux_green_state = 0;
 
-void set_aux_leds(int red, int green)
+static void set_aux_leds(int red, int green)
 {
     if (aux_red_state == red && aux_green_state == green) {
         return;
@@ -367,7 +377,7 @@ void set_aux_leds(int red, int green)
     }
 }
 
-void blink_aux()
+static void blink_aux()
 {
     static int last_blink_secs;
 
@@ -381,7 +391,7 @@ void blink_aux()
     set_aux_leds(!aux_red_state, aux_red_state);
 }
 
-void show_progress()
+static void show_progress()
 {
 /*   static int counter = 0;
     char ch = "|\\-/"[(counter++) % 4];
@@ -407,7 +417,7 @@ static void vol_down(char *buf, snd_pcm_uframes_t period_size)
     int i;
     s16 *val = (s16 *) (buf);
     for (i = 0; i < period_size; i++) {
-        *val = 0; // *val / 2;
+        *val = 0;               // *val / 2;
         val++;
     }
 }
@@ -422,7 +432,7 @@ static void vol_down(char *buf, snd_pcm_uframes_t period_size)
    We use integer for computing volumes, this should be fine if the buffer size
    is not too big (65535 is max).
 */
-void reduce_echo(char *p0, char *p1, snd_pcm_uframes_t period_size)
+static void reduce_echo(char *p0, char *p1, snd_pcm_uframes_t period_size)
 {
     int i;
     int sum_p0 = 0;
@@ -465,6 +475,72 @@ void reduce_echo(char *p0, char *p1, snd_pcm_uframes_t period_size)
 }
 #endif
 
+struct route_stream p0 = {
+    .id = "p0",
+    .pcm_name = "default",
+    .stream = SND_PCM_STREAM_PLAYBACK,
+    .start_threshold = 1024,
+    .stop_threshold = 1024,
+    .buffer_size = 1024,
+    .period_size = 256,
+    .handle = 0,
+    .period_buffer = 0
+};
+
+struct route_stream r0 = {
+    .id = "r0",
+    .pcm_name = "default",
+    .stream = SND_PCM_STREAM_CAPTURE,
+    .start_threshold = 0,
+    .stop_threshold = 0,
+    .buffer_size = 1024,
+    .period_size = 256,
+    .handle = 0,
+    .period_buffer = 0
+};
+
+struct route_stream p1 = {
+    .id = "p1",
+    .pcm_name = "hw:1,0",
+    .stream = SND_PCM_STREAM_PLAYBACK,
+    .start_threshold = 1024,
+    .stop_threshold = 1024,
+    .buffer_size = 1024,
+    .period_size = 256,
+    .handle = 0,
+    .period_buffer = 0
+};
+
+struct route_stream r1 = {
+    .id = "r1",
+    .pcm_name = "hw:1,0",
+    .stream = SND_PCM_STREAM_CAPTURE,
+    .start_threshold = 0,
+    .stop_threshold = 0,
+    .buffer_size = 1024,
+    .period_size = 256,
+    .handle = 0,
+    .period_buffer = 0
+};
+
+static void close_route_streams()
+{
+    close_route_stream(&p0);
+    close_route_stream(&p1);
+    close_route_stream(&r0);
+    close_route_stream(&r1);
+}
+
+static void sighandler(int signum)
+{
+    if (terminating) {
+        return;
+    }
+    terminating = 1;
+    fprintf(logfile, "received signal %d\n", signum);
+    close_route_streams();
+}
+
 int main()
 {
     int rc;
@@ -473,6 +549,10 @@ int main()
 #ifdef USE_SPEEX_AEC
     SpeexEchoState *echo_state;
 #endif
+
+    // Register for TERM and interrupt signals
+    signal(SIGINT, sighandler);
+    signal(SIGTERM, sighandler);
 
     blink_aux();                // turn red led on so that we know we started
 
@@ -499,54 +579,6 @@ int main()
     echo_state = speex_echo_state_init(256, 8192);
 #endif
 
-    struct route_stream p0 = {
-        .id = "p0",
-        .pcm_name = "default",
-        .stream = SND_PCM_STREAM_PLAYBACK,
-        .start_threshold = 1024,
-        .stop_threshold = 1024,
-        .buffer_size = 1024,
-        .period_size = 256,
-        .handle = 0,
-        .period_buffer = 0
-    };
-
-    struct route_stream r0 = {
-        .id = "r0",
-        .pcm_name = "default",
-        .stream = SND_PCM_STREAM_CAPTURE,
-        .start_threshold = 0,
-        .stop_threshold = 0,
-        .buffer_size = 1024,
-        .period_size = 256,
-        .handle = 0,
-        .period_buffer = 0
-    };
-
-    struct route_stream p1 = {
-        .id = "p1",
-        .pcm_name = "hw:1,0",
-        .stream = SND_PCM_STREAM_PLAYBACK,
-        .start_threshold = 1024,
-        .stop_threshold = 1024,
-        .buffer_size = 1024,
-        .period_size = 256,
-        .handle = 0,
-        .period_buffer = 0
-    };
-
-    struct route_stream r1 = {
-        .id = "r1",
-        .pcm_name = "hw:1,0",
-        .stream = SND_PCM_STREAM_CAPTURE,
-        .start_threshold = 0,
-        .stop_threshold = 0,
-        .buffer_size = 1024,
-        .period_size = 256,
-        .handle = 0,
-        .period_buffer = 0
-    };
-
     /* Open streams - umts first */
     open_route_stream_repeated(&p1);
     open_route_stream_repeated(&r1);
@@ -554,7 +586,7 @@ int main()
     open_route_stream_repeated(&r0);
 
     /* Route sound */
-    for (;;) {
+    while (!terminating) {
 
         /* Recording  - first from internal card (so that we always clean the
            recording buffer), then UMTS, which can fail */
@@ -567,8 +599,7 @@ int main()
         if (rc == ERR_READ && started) {
             fprintf(logfile,
                     "read error after some succesful routing (hangup)\n");
-            set_aux_leds(0, 0);
-            return 0;
+            break;
         }
         if (rc != 0) {
             continue;
@@ -585,7 +616,7 @@ int main()
         speex_echo_cancellation(echo_state, (spx_int16_t *) r0.period_buffer,
                                 (spx_int16_t *) p0.period_buffer,
                                 (spx_int16_t *) p1.period_buffer);
-        
+
         memmove(p0.period_buffer, r1.period_buffer, r1.period_buffer_size);
 #endif
 
@@ -603,11 +634,9 @@ int main()
     speex_echo_state_destroy(echo_state);
 #endif
 
-    close_route_stream(&p0);
-    close_route_stream(&p1);
-    close_route_stream(&r0);
-    close_route_stream(&r1);
-
+    fprintf(logfile, "ending up\n");
+    close_route_streams();
+    set_aux_leds(0, 0);
     fclose(logfile);
 
     return 0;
