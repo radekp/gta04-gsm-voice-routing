@@ -2,7 +2,7 @@ TEMPLATE=app
 TARGET=gsm-voice-routing
 
 CONFIG+=qtopia
-LIBS+=-lrt -lasound -lm -ldl -lpthread
+LIBS+=-lrt -lasound -lm -ldl -lpthread -lspeexdsp
 DEFINES+=QTOPIA
 
 # I18n info
