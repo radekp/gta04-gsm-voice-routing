@@ -530,12 +530,15 @@ struct route_stream r1 = {
     .period_buffer = 0
 };
 
-static void close_route_streams()
+static void cleanup()
 {
     close_route_stream(&p0);
     close_route_stream(&p1);
     close_route_stream(&r0);
     close_route_stream(&r1);
+    
+    set_aux_leds(0, 0);
+    fclose(logfile);
 }
 
 static void sighandler(int signum)
@@ -545,7 +548,8 @@ static void sighandler(int signum)
     }
     terminating = 1;
     fprintf(logfile, "received signal %d\n", signum);
-    close_route_streams();
+    cleanup();
+    exit(0);
 }
 
 int main()
@@ -642,9 +646,6 @@ int main()
 #endif
 
     fprintf(logfile, "ending up\n");
-    close_route_streams();
-    set_aux_leds(0, 0);
-    fclose(logfile);
-
+    cleanup();
     return 0;
 }
