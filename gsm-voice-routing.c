@@ -547,7 +547,7 @@ static void sighandler(int signum)
         return;
     }
     terminating = 1;
-    fprintf(logfile, "received signal %d\n", signum);
+    fprintf(logfile, "gsm-voice-routing ending - signal %d\n", signum);
     cleanup();
     exit(0);
 }
@@ -645,7 +645,7 @@ int main()
     speex_echo_state_destroy(echo_state);
 #endif
 
-    fprintf(logfile, "ending up\n");
+    fprintf(logfile, "gsm-voice-routing ending\n");
     cleanup();
     return 0;
 }
